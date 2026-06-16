@@ -183,6 +183,7 @@ entity psx_mister is
       PadPortJustif1        : in  std_logic;
       PadPortStick1         : in  std_logic;
       PadPortPopn1          : in  std_logic;
+      PadPortDensha1        : in  std_logic;
       PadPortEnable2        : in  std_logic;
       PadPortDigital2       : in  std_logic;
       PadPortAnalog2        : in  std_logic;
@@ -194,6 +195,7 @@ entity psx_mister is
       PadPortJustif2        : in  std_logic;
       PadPortStick2         : in  std_logic;
       PadPortPopn2          : in  std_logic;
+      PadPortDensha2        : in  std_logic;
       KeyTriangle           : in  std_logic_vector(3 downto 0);
       KeyCircle             : in  std_logic_vector(3 downto 0);
       KeyCross              : in  std_logic_vector(3 downto 0);
@@ -476,6 +478,7 @@ begin
       joypad1.PadPortDS     => PadPortDS1,
       joypad1.PadPortStick  => PadPortStick1,
       joypad1.PadPortPopn   => PadPortPopn1,
+      joypad1.PadPortDensha => PadPortDensha1,
 
       joypad1.KeyTriangle   => KeyTriangle(0),
       joypad1.KeyCircle     => KeyCircle(0),
@@ -511,6 +514,7 @@ begin
       joypad2.PadPortDS     => PadPortDS2,
       joypad2.PadPortStick  => PadPortStick2,
       joypad2.PadPortPopn   => PadPortPopn2,
+      joypad2.PadPortDensha => PadPortDensha2,
 
       joypad2.KeyTriangle   => KeyTriangle(1),
       joypad2.KeyCircle     => KeyCircle(1),

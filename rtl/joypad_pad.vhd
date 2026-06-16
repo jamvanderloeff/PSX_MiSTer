@@ -127,6 +127,7 @@ architecture arch of joypad_pad is
    signal justifSave      : std_logic := '0';
    signal dsSave          : std_logic := '0';
    signal analogStickSave : std_logic := '0';
+   signal denshaSave      : std_logic := '0';
 
    signal prevMouseEvent  : std_logic := '0';
    signal MouseLeft_1     : std_logic := '0';
@@ -181,7 +182,7 @@ architecture arch of joypad_pad is
       x"00", x"02", x"00", x"01", x"00",        -- 47
       x"00", x"00", x"04", x"00", x"00",        -- 4C+00
       x"00", x"00", x"07", x"00", x"00",        -- 4C+01
-      x"FF", x"FF", x"FF", x"FF",         -- multitap padding
+      x"FF", x"FF", x"FF", x"FF",               -- multitap padding
       x"FF", x"FF", x"FF", x"FF"
    );
 
@@ -420,6 +421,7 @@ begin
                         justifSave      <= joypad.PadPortJustif;
                         dsSave          <= joypad.PadPortDS;
                         analogStickSave <= joypad.PadPortStick;
+                        denshaSave      <= joypad.PadPortDensha;
                         receiveValid    <= '1';
                         receiveBuffer   <= x"FF";
                         dsConfigModeSave  <= portStates(portNr).dsConfigMode;
