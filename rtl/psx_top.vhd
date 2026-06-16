@@ -69,6 +69,7 @@ entity psx_top is
       REVERBOFF             : in  std_logic;
       REPRODUCIBLESPUDMA    : in  std_logic;
       WIDESCREEN            : in  std_logic_vector(1 downto 0);
+	  oldGPU                : in  std_logic;
       -- RAM/BIOS interface  
       biosregion            : in  std_logic_vector(1 downto 0);      
       ram_refresh           : out std_logic;
@@ -219,6 +220,7 @@ entity psx_top is
       load_state            : in  std_logic;
       savestate_number      : in  integer range 0 to 3;
       state_loaded          : out std_logic;
+      validSStates          : out std_logic_vector(3 downto 0);
       rewind_on             : in  std_logic;
       rewind_active         : in  std_logic;
       -- cheats
@@ -1401,7 +1403,7 @@ begin
       pauseOnCDSlow        => pauseOnCDSlow,
       LIDopen              => LIDopen,
       region               => region,
-      region_out           => region_out,
+      region_out           => region_out,	  
       
       pauseCD              => pauseCD,
       Pause_idle_cd        => Pause_idle_cd,
@@ -1485,6 +1487,8 @@ begin
       vCrop                => vCrop,   
       hCrop                => hCrop,   
       
+	  oldGPU               => oldGPU,
+	  
       Gun1CrosshairOn      => Gun1CrosshairOn,
       Gun1X                => Gun1X,
       Gun1Y_scanlines      => Gun1Y_scanlines,
@@ -2067,7 +2071,8 @@ begin
    isavestates : entity work.savestates
    generic map
    (
-      FASTSIM => is_simu
+      FASTSIM                 => is_simu,
+      Softmap_SaveState_ADDR  => 58720256
    )
    port map
    (
@@ -2083,7 +2088,9 @@ begin
       loadExe                 => loadExe,
            
       load_done               => state_loaded,
+      validSStates            => validSStates,
             
+      savestate_number        => savestate_number,
       increaseSSHeaderCount   => increaseSSHeaderCount,
       save                    => savestate_savestate,
       load                    => savestate_loadstate,

@@ -21,7 +21,7 @@ entity cd_top is
       testSeek             : in  std_logic;
       pauseOnCDSlow        : in  std_logic;
       region               : in  std_logic_vector(1 downto 0);
-      region_out           : out std_logic_vector(1 downto 0);
+      region_out           : out std_logic_vector(1 downto 0);	  
       
       pauseCD              : out std_logic := '0';
       Pause_idle_cd        : out std_logic := '0';
@@ -233,7 +233,7 @@ architecture arch of cd_top is
    signal seekLBA                   : integer range 0 to 524287; 
    signal playLBA                   : integer range 0 to 524287; 
    signal diffLBA                   : integer range 0 to 524287; 
-   signal seekTimeMul               : integer range 0 to 127; 
+   signal seekTimeMul               : integer range 0 to 137; 
    signal currentTrackBCD           : std_logic_vector(7 downto 0);
    signal nextTrack                 : std_logic_vector(7 downto 0);
    
@@ -264,6 +264,7 @@ architecture arch of cd_top is
    signal clearSectorBuffers        : std_logic := '0';  
    signal writeSectorPointer        : unsigned(2 downto 0) := (others => '0');
    signal readSectorPointer         : unsigned(2 downto 0) := (others => '0');
+   signal firstSectorPending        : std_logic := '0';
    
    type tphysicalUpdateState is
    (
@@ -280,6 +281,7 @@ architecture arch of cd_top is
    signal phy_base                 : integer range 0 to 524287;
    signal phy_oldOffset            : integer range 0 to 31;
    signal phy_newOffset            : integer range 0 to 31;
+   signal phy_spt                  : integer range 8 to 22 := 8;
    
    -- sector fetch
    type tsectorFetch is
@@ -588,8 +590,12 @@ begin
                            
                            when x"3" =>
                               if (bus_dataWrite(7) = '1') then
-                                 if (FifoData_Empty = '1') then -- don't do anything when data still inside?
-                                    copyData <= '1';
+                                 if (FifoData_Empty = '1') then
+                           
+                                    if (firstSectorPending = '0') then
+                                       copyData <= '1';
+                                    end if;
+                           
                                  end if;
                               else
                                  FifoData_reset <= '1';
@@ -714,19 +720,15 @@ begin
                end if;
             end if;
             
-            if (ackRead = '1' or ackRead_data = '1') then
-               if (CDROM_IRQFLAG = "00001") then -- irq for sector still pending, sector missed
-                  -- will be handled when next sector is fetched from cpu interface
-               elsif (CDROM_IRQFLAG /= "00000") then -- store sector done if current irq is something else, so CPU will be notified later
+            -- INT1 (Data Ready)
+            -- INT1 is always queued via pendingDriveIRQ to preserve hardware-like delay
+            -- and avoid INT1/INT3 race conditions (Burger Burger, Jikkyō '95),
+            -- while still guaranteeing delivery (Crime Crackers, Parodius).            
+            if (ackRead = '1' or ackRead_data = '1') then            
+               if (pendingDriveIRQ /= "00001") then
                   pendingDriveIRQ      <= "00001";
                   pendingDriveResponse <= internalStatus;
-               else
-                  CDROM_IRQFLAG <= "00001";
-                  if (CDROM_IRQENA(0) = '1') then
-                     irqOut <= '1';
-                  end if;
-                  ackRead_valid <= '1';
-               end if;
+               end if;            
             end if;
             
             if (ackPendingIRQNext = '1') then
@@ -1013,12 +1015,14 @@ begin
                            --fastForwardRate <= to_signed(-4, 8); -- debug test!
                            
                            if ((FifoParam_Empty = '1' or FifoParam_Dout = x"00") and (setLocActive = '0' or seekLBA = lastReadSector) and (driveState = DRIVE_PLAYING or ((driveState = DRIVE_SEEKLOGICAL or driveState = DRIVE_SEEKPHYSICAL or driveState = DRIVE_SEEKIMPLICIT) and playAfterSeek = '1'))) then
-                              fastForwardRate <= (others => '0');
+                              playLBA <= currentLBA;
                            else
                               play           <= '1';
                               lastreportCDDA <= (others => '1');
-                           end if;
-                           
+							  if (FifoParam_Empty = '1' or FifoParam_Dout = x"00") then
+							     playLBA <= currentLBA;
+                              end if;
+                           end if; 
                         end if;
                         
                      when x"04" => -- forward
@@ -1088,25 +1092,64 @@ begin
                         cmdStop     <= '1';
                         
                      when x"09" => -- pause
-                        cmdAck      <= '1';
-                        cmdPending  <= '0';
-                        working     <= '1';
-                        workDelay   <= 7000 - 2;
-                        workCommand <= nextCmd;
-                        cmdResetXa  <= '1';
-                        if (driveState = DRIVE_READING or driveState = DRIVE_PLAYING) then
-                           -- todo: should this be swapped between single speed and double speed? DuckStation has double speed longer and psx spx doc has single speed being longer
-                           if (modeReg(7) = '1') then
-                              workDelay  <= 2157295 + driveDelay; -- value from psx spx doc
-                           else
-                              workDelay  <= 1066874 + driveDelay; -- value from psx spx doc
+                     
+                        -- CASE 1: PAUSE during SEEK (Parasite Eve II expects this to be accepted)
+                        if (driveState = DRIVE_SEEKLOGICAL or
+                            driveState = DRIVE_SEEKPHYSICAL or
+                            driveState = DRIVE_SEEKIMPLICIT) then
+                     
+                           cmdAck     <= '1';
+                           cmdPending <= '0';
+                     
+                           working     <= '1';
+                           workDelay   <= 7000 - 2;
+                           workCommand <= nextCmd;
+                           cmdResetXa  <= '1';
+                     
+                           if (readAfterSeek = '1') then
+                              -- cancel pending read after seek - Parasite Eve II
+                              stop_afterseek <= '1';
+                              -- abort active seek operation - Vigilante 8
+                              drive_stop <= '1';
+                           elsif (playAfterSeek = '1') then
+                              -- keep pending play-after-seek alive for CDDA startup
+                              null;
                            end if;
-                        end if;
-                        if (driveState = DRIVE_SEEKLOGICAL or driveState = DRIVE_SEEKPHYSICAL or driveState = DRIVE_SEEKIMPLICIT) then
-                           -- todo: complete seek?
-                           stop_afterseek <= '1';
+                     
+                        -- CASE 2: PAUSE during READ/PLAY but first sector NOT delivered yet
+                        -- (Duke Nukem / MiruMiru)
+                        elsif ((driveState = DRIVE_READING or driveState = DRIVE_PLAYING) and
+                               internalStatus(6) = '1') then
+                     
+                           -- Reject PAUSE: NOT_READY
+                           cmdPending              <= '0';
+                           errorResponseCmd_new    <= '1';
+                           errorResponseCmd_error  <= x"01"; -- STAT_ERROR
+                           errorResponseCmd_reason <= x"80"; -- NOT_READY
+                     
+                        -- CASE 3: Normal PAUSE
                         else
+                     
+                           cmdAck     <= '1';
+                           cmdPending <= '0';
+                     
+                           working     <= '1';
+                           workDelay   <= 7000 - 2;
+                           workCommand <= nextCmd;
+                           cmdResetXa  <= '1';
+                     
+                           if (driveState = DRIVE_READING or driveState = DRIVE_PLAYING) then
+                              -- todo: should this be swapped between single speed and double speed? DuckStation has double speed longer and psx spx doc has single speed being longer
+                              -- attempting to change these values may cause problems in some sensitive games 
+							   if (modeReg(7) = '1') then
+                                 workDelay  <= 2157295 + driveDelay; -- value from psx spx doc
+                              else
+                                 workDelay  <= 1066874 + driveDelay; -- value from psx spx doc
+                              end if;
+                           end if;
+                     
                            drive_stop <= '1';
+                     
                         end if;
                      
                      when x"0A" => -- reset
@@ -1696,6 +1739,8 @@ begin
    process(clk1x)
       variable skipreading     : std_logic;
       variable physicalLBANew  : integer range 0 to 524287;
+      variable phy_mm_v        : integer range 0 to 116;
+      variable phy_spt_v       : integer range 8 to 22;															
    begin
       if (rising_edge(clk1x)) then
 
@@ -1897,7 +1942,9 @@ begin
                   when DRIVE_READING | DRIVE_PLAYING =>
                      if (nextSubdata(1) = LEAD_OUT_TRACK_NUMBER) then
                         internalStatus(7 downto 5) <= "000"; -- ClearActiveBits
-                        internalStatus(1)          <= '0'; -- motor off
+						-- The motor should remain ON during normal CD audio playback. End-of-track detection should NOT stop the motor.
+                        -- always signal end of playback with interrupt
+                        -- internalStatus(1)          <= '0'; -- motor off
                         driveState   <= DRIVE_IDLE;
                         ackDriveEnd  <= '1';
                      else
@@ -2036,10 +2083,18 @@ begin
                   seekTimeMul <= 5 + diffLBA / 8; -- 5 .. 14
                elsif (diffLBA < 4500) then
                   seekTimeMul <= 14 + diffLBA / 256; -- 14 .. 31
+            
+               elsif (diffLBA < 250000) then
+                  seekTimeMul <= 31 + diffLBA / 8192; -- 31 .. 73            
                else
-                  seekTimeMul <= 31 + diffLBA / 8192; -- 31 .. 73
+                  -- extreme sled seek only when starting from inner position after Stop
+                  if (currentLBA = 0) then
+                     seekTimeMul <= 137;
+                  else
+                     seekTimeMul <= 31 + diffLBA / 8192;
+                  end if;
                end if;
-                  
+			   
             end if;
             
             if (addSeekTime = '1') then
@@ -2093,6 +2148,11 @@ begin
             
             if (startReading = '1') then
                clearSectorBuffers <= '1';
+			   
+			   if (afterSeek = '0') then
+			      internalStatus(6) <= '1';  -- seeking until first sector arrives
+			   end if;
+															
                --todo: check for setLocActive needed when coming from readSN?
                if (driveState = DRIVE_SEEKLOGICAL or driveState = DRIVE_SEEKPHYSICAL or driveState = DRIVE_SEEKIMPLICIT) then
                   readAfterSeek     <= '1';
@@ -2165,6 +2225,7 @@ begin
                driveBusy                  <= '0';
                internalStatus(7 downto 5) <= "000"; -- ClearActiveBits
                internalStatus(1)          <= '0';   --motor off
+			   currentLBA                 <= 0;
             end if;
             
             if (drive_stop = '1') then
@@ -2224,15 +2285,51 @@ begin
                      physicalUpdateState <= PHYSICALUPDATE_START;
                   end if;
             
-               when PHYSICALUPDATE_START =>
-                  physicalUpdateState <= PHYSICALUPDATE_CHECK;
-                  -- todo: if (!lastSectorHeaderValid) -> different base position and different sectors per track?
-                  -- todo: fixed 32 sectorPerTrack, should be 7.0f + 2.811844405f * std::log((float)(currentLBA / 4500) + 1);
-                  if (currentlba < 32) then
-                     phy_base <= currentlba;
-                  else
-                     phy_base <= currentlba - 31;
-                  end if;
+            when PHYSICALUPDATE_START =>
+               physicalUpdateState <= PHYSICALUPDATE_CHECK;
+
+               -- rama PSX mech SPT table
+               phy_mm_v := currentLBA / FRAMES_PER_MINUTE;
+
+               if (phy_mm_v = 0) then
+                  phy_spt_v := 8;
+               elsif (phy_mm_v <= 4) then
+                  phy_spt_v := 9;
+               elsif (phy_mm_v <= 7) then
+                  phy_spt_v := 10;
+               elsif (phy_mm_v <= 11) then
+                  phy_spt_v := 11;
+               elsif (phy_mm_v <= 16) then
+                  phy_spt_v := 12;
+               elsif (phy_mm_v <= 23) then
+                  phy_spt_v := 13;
+               elsif (phy_mm_v <= 27) then
+                  phy_spt_v := 14;
+               elsif (phy_mm_v <= 32) then
+                  phy_spt_v := 15;
+               elsif (phy_mm_v <= 39) then
+                  phy_spt_v := 16;
+               elsif (phy_mm_v <= 44) then
+                  phy_spt_v := 17;
+               elsif (phy_mm_v <= 52) then
+                  phy_spt_v := 18;
+               elsif (phy_mm_v <= 60) then
+                  phy_spt_v := 19;
+               elsif (phy_mm_v <= 67) then
+                  phy_spt_v := 20;
+               elsif (phy_mm_v <= 74) then
+                  phy_spt_v := 21;
+               else
+                  phy_spt_v := 22;
+               end if;
+
+               phy_spt <= phy_spt_v;
+
+               if (currentLBA < phy_spt_v) then
+                  phy_base <= currentLBA;
+               else
+                  phy_base <= currentLBA - (phy_spt_v - 1);
+               end if;
                   
                when PHYSICALUPDATE_CHECK =>
                   physicalUpdateState <= PHYSICALUPDATE_CALC1;
@@ -2246,7 +2343,7 @@ begin
                   
                when PHYSICALUPDATE_CALC2 =>  
                   physicalUpdateState <= PHYSICALUPDATE_CALCDONE;
-                  phy_newOffset <= (phy_oldOffset + 1) mod 32;
+                  phy_newOffset <= (phy_oldOffset + 1) mod phy_spt;
             
                when PHYSICALUPDATE_CALCDONE =>
                   physicalLBANew := phy_base + phy_newOffset;
@@ -2503,24 +2600,24 @@ begin
                   -- synthesis translate_on
                   
                   readSubchannel <= '1';
-                  
+															
                   if (
-                      (libcryptKey(15) = '1' and (lastReadSector = 14105 or lastReadSector = 14110)) or
-                      (libcryptKey(14) = '1' and (lastReadSector = 14231 or lastReadSector = 14236)) or
-                      (libcryptKey(13) = '1' and (lastReadSector = 14485 or lastReadSector = 14490)) or
-                      (libcryptKey(12) = '1' and (lastReadSector = 14579 or lastReadSector = 14584)) or
-                      (libcryptKey(11) = '1' and (lastReadSector = 14649 or lastReadSector = 14654)) or
-                      (libcryptKey(10) = '1' and (lastReadSector = 14899 or lastReadSector = 14904)) or
-                      (libcryptKey(9)  = '1' and (lastReadSector = 15056 or lastReadSector = 15061)) or
-                      (libcryptKey(8)  = '1' and (lastReadSector = 15130 or lastReadSector = 15135)) or
-                      (libcryptKey(7)  = '1' and (lastReadSector = 15242 or lastReadSector = 15247)) or
-                      (libcryptKey(6)  = '1' and (lastReadSector = 15312 or lastReadSector = 15317)) or
-                      (libcryptKey(5)  = '1' and (lastReadSector = 15378 or lastReadSector = 15383)) or
-                      (libcryptKey(4)  = '1' and (lastReadSector = 15628 or lastReadSector = 15633)) or
-                      (libcryptKey(3)  = '1' and (lastReadSector = 15919 or lastReadSector = 15924)) or
-                      (libcryptKey(2)  = '1' and (lastReadSector = 16031 or lastReadSector = 16036)) or
-                      (libcryptKey(1)  = '1' and (lastReadSector = 16101 or lastReadSector = 16106)) or
-                      (libcryptKey(0)  = '1' and (lastReadSector = 16167 or lastReadSector = 16172))
+                      (libcryptKey(15) = '1' and ((lastReadSector + 2) = 14105 or (lastReadSector + 2) = 14110)) or
+                      (libcryptKey(14) = '1' and ((lastReadSector + 2) = 14231 or (lastReadSector + 2) = 14236)) or
+                      (libcryptKey(13) = '1' and ((lastReadSector + 2) = 14485 or (lastReadSector + 2) = 14490)) or
+                      (libcryptKey(12) = '1' and ((lastReadSector + 2) = 14579 or (lastReadSector + 2) = 14584)) or
+                      (libcryptKey(11) = '1' and ((lastReadSector + 2) = 14649 or (lastReadSector + 2) = 14654)) or
+                      (libcryptKey(10) = '1' and ((lastReadSector + 2) = 14899 or (lastReadSector + 2) = 14904)) or
+                      (libcryptKey(9)  = '1' and ((lastReadSector + 2) = 15056 or (lastReadSector + 2) = 15061)) or
+                      (libcryptKey(8)  = '1' and ((lastReadSector + 2) = 15130 or (lastReadSector + 2) = 15135)) or
+                      (libcryptKey(7)  = '1' and ((lastReadSector + 2) = 15242 or (lastReadSector + 2) = 15247)) or
+                      (libcryptKey(6)  = '1' and ((lastReadSector + 2) = 15312 or (lastReadSector + 2) = 15317)) or
+                      (libcryptKey(5)  = '1' and ((lastReadSector + 2) = 15378 or (lastReadSector + 2) = 15383)) or
+                      (libcryptKey(4)  = '1' and ((lastReadSector + 2) = 15628 or (lastReadSector + 2) = 15633)) or
+                      (libcryptKey(3)  = '1' and ((lastReadSector + 2) = 15919 or (lastReadSector + 2) = 15924)) or
+                      (libcryptKey(2)  = '1' and ((lastReadSector + 2) = 16031 or (lastReadSector + 2) = 16036)) or
+                      (libcryptKey(1)  = '1' and ((lastReadSector + 2) = 16101 or (lastReadSector + 2) = 16106)) or
+                      (libcryptKey(0)  = '1' and ((lastReadSector + 2) = 16167 or (lastReadSector + 2) = 16172))
                   ) then
                       readSubchannel <= '0';
                   end if;
@@ -2665,7 +2762,7 @@ begin
                   subchannelSector <= physicalLBA;
                   UpdateSubchannel <= '1';
                else
-                  subchannelSector <= lastReadSector;
+                  subchannelSector <= lastReadSector +2;
                end if;
             end if;
             
@@ -2727,6 +2824,7 @@ begin
                      --error <= '1';
                   end if;
                   sectorBufferSizes(to_integer(writeSectorPointer)) <= procSize;
+				  firstSectorPending <= '0';
                
                when SPROC_DATA =>
                   procCount    <= procCount + 1;
@@ -2791,8 +2889,8 @@ begin
                   CDDA_data  <= sectorBuffer_DataB;
                   
             end case;
-            
 
+															
             case (copyState) is
             
                when COPY_IDLE =>
@@ -2845,13 +2943,17 @@ begin
             end case;
             
             -- if data fifo is reset while copy is still ongoing, stop copy immidiatly so fifo stays empty
-            if (FifoData_reset = '1' and copyState /= COPY_IDLE) then
-               copyState   <= COPY_IDLE;
-               FifoData_Wr <= '0';
+            if (FifoData_reset = '1') then            
+               firstSectorPending <= '0';            
+               if (copyState /= COPY_IDLE) then
+                  copyState   <= COPY_IDLE;
+                  FifoData_Wr <= '0';
+               end if;            
             end if;
             
             if (clearSectorBuffers = '1') then
                sectorBufferSizes <= (others => 0);
+			   firstSectorPending <= '1';
             end if;
 
          end if;

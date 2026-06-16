@@ -65,6 +65,7 @@ entity psx_mister is
       REVERBOFF             : in  std_logic;
       REPRODUCIBLESPUDMA    : in  std_logic;
       WIDESCREEN            : in  std_logic_vector(1 downto 0);
+	  oldGPU                : in  std_logic;
       -- RAM/BIOS interface      
       biosregion            : in  std_logic_vector(1 downto 0);  
       ram_refresh           : out std_logic;
@@ -267,6 +268,7 @@ entity psx_mister is
       load_state            : in  std_logic;
       savestate_number      : in  integer range 0 to 3;
       state_loaded          : out std_logic;
+      validSStates          : out std_logic_vector(3 downto 0);
       rewind_on             : in  std_logic;
       rewind_active         : in  std_logic;
       -- cheats
@@ -358,6 +360,7 @@ begin
       REVERBOFF             => REVERBOFF,
       REPRODUCIBLESPUDMA    => REPRODUCIBLESPUDMA,
       WIDESCREEN            => WIDESCREEN,
+	  oldGPU                => oldGPU,
       -- RAM/BIOS interface        
       biosregion            => biosregion,
       ram_refresh           => ram_refresh,
@@ -644,6 +647,7 @@ begin
       load_state            => load_state,           
       savestate_number      => savestate_number,     
       state_loaded          => state_loaded,
+      validSStates          => validSStates,
       rewind_on             => rewind_on,    
       -- cheats
       rewind_active         => rewind_active,
